@@ -1,0 +1,104 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  UV_FROZEN: "1"
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.3"
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      # Publishing is irreversible: a version can never be re-uploaded to PyPI. Refuse a tag that
+      # does not name the version actually being built, before anything is built.
+      - name: Assert the tag matches _version.py
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          file_version="$(grep -E '^__version__' src/january_ai/_version.py \
+            | grep -oE '[0-9]+\.[0-9]+\.[0-9]+[0-9A-Za-z.+-]*')"
+          if [ -z "$file_version" ]; then
+            echo "::error::could not read __version__ from src/january_ai/_version.py"
+            exit 1
+          fi
+          if [ "$tag_version" != "$file_version" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} declares ${tag_version} but src/january_ai/_version.py says ${file_version}"
+            exit 1
+          fi
+          echo "releasing ${file_version} from tag ${GITHUB_REF_NAME}"
+
+      - name: Build the sdist and the wheel
+        run: uv build
+
+      - name: Verify the wheel ships py.typed and every subpackage
+        run: |
+          python - <<'PY'
+          import pathlib
+          import sys
+          import zipfile
+
+          wheels = sorted(pathlib.Path("dist").glob("*.whl"))
+          if len(wheels) != 1:
+              sys.exit(f"expected exactly one wheel in dist/, found {[w.name for w in wheels]}")
+
+          wheel = wheels[0]
+          shipped = set(zipfile.ZipFile(wheel).namelist())
+
+          src = pathlib.Path("src")
+          required = {"january_ai/py.typed"}
+          for init in sorted(src.rglob("__init__.py")):
+              required.add(init.relative_to(src).as_posix())
+
+          missing = sorted(name for name in required if name not in shipped)
+          if missing:
+              sys.exit(f"{wheel.name} is missing: {missing}")
+
+          print(f"{wheel.name} ships all {len(required)} required entries")
+          PY
+
+      - name: twine check
+        run: uvx twine check dist/*
+
+      - name: Upload the distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 7
+
+  publish:
+    name: publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    # Trusted Publishing: PyPI verifies this workflow's OIDC identity, so there is no API token to
+    # store, leak, or rotate. Configure the publisher for January-ai/python-sdk, release.yml, and the
+    # pypi environment at https://pypi.org/manage/project/january-ai/settings/publishing/
+    environment:
+      name: pypi
+      url: https://pypi.org/p/january-ai
+    permissions:
+      id-token: write
+    steps:
+      - name: Download the distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
