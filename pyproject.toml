@@ -1,0 +1,83 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "january-ai"
+dynamic = ["version"]
+description = "Python SDK for the January AI nutrition intelligence API"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "January AI", email = "support@january.ai" }]
+keywords = ["nutrition", "food", "glucose", "health", "api", "sdk"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Typing :: Typed",
+]
+dependencies = [
+    "httpx>=0.25,<1",
+    "pydantic>=2.7,<3",
+    "pillow>=10",
+    "anyio>=4",
+]
+
+[project.urls]
+Homepage = "https://january.ai"
+Documentation = "https://docs.january.ai"
+Repository = "https://github.com/januaryai/python-sdk"
+Issues = "https://github.com/januaryai/python-sdk/issues"
+
+[tool.hatch.version]
+path = "src/january_ai/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/january_ai"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-cov",
+    "respx>=0.21",
+    "anyio[trio]>=4",
+    "mypy>=1.11",
+    "ruff>=0.6",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = []
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+strict = true
+python_version = "3.10"
+plugins = ["pydantic.mypy"]
+files = ["src", "tests", "examples"]
+warn_unreachable = true
+disallow_any_generics = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers --strict-config"
+
+[tool.coverage.run]
+source = ["january_ai"]
+branch = true
