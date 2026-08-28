@@ -51,6 +51,7 @@ BASE_URL = "https://partners.january.ai"
 FOOD_ID = 101963552
 FOOD_URL = f"{BASE_URL}/v1.2/foods/{FOOD_ID}"
 FOOD_LOGS_URL = f"{BASE_URL}/v1.2/food-logs"
+CLIENT_TOKENS_URL = f"{BASE_URL}/v1.2/auth/client-tokens"
 
 END_USER_ID = "acme-user-8271"
 DOCS_URL = "https://docs.january.ai/rest-api/api-overview"
@@ -84,6 +85,14 @@ FOOD_LOG_PAYLOAD: dict[str, object] = {
 FOODS_LOGGED: Sequence[FoodSelectionParam] = [
     {"id": FOOD_ID, "serving": {"id": 68051535, "quantity": 1.0}}
 ]
+
+CLIENT_TOKEN_PAYLOAD: dict[str, object] = {
+    "token": "ct-4fQr7yNb2KcXm9TvLpZ3wHs6JdRg8AeYuQ1oViB5xCn",
+    "expires_in": 1800,
+    "expires_at": "2024-09-13T12:04:56Z",
+    "end_user_id": END_USER_ID,
+    "scopes": ["foods:read"],
+}
 
 # The five codes the API documents as safe to retry with backoff, each on the status it arrives on.
 RETRYABLE_CASES: list[tuple[int, str]] = [
@@ -664,6 +673,111 @@ def test_rate_limit_is_still_retried_on_a_food_log_create(
     log = user_client.food_logs.create(FOODS_LOGGED)
 
     assert log.id == FOOD_LOG_PAYLOAD["id"]
+    assert route.call_count == 2
+
+
+def test_read_timeout_is_never_retried_on_a_client_token_mint(
+    client: January, respx_mock: respx.MockRouter, recorded_sleeps: list[float]
+) -> None:
+    """Refuse to replay an ambiguous failure on the other non-idempotent operation: minting."""
+    # Minting has exactly the shape that made food_logs.create refuse ambiguous replays. Every POST
+    # that reaches the server creates another token, the API accepts no idempotency key, and the raw
+    # value is returned exactly once - so a replay after a ReadTimeout mints a credential nobody can
+    # see, valid until its TTL runs out and clearable only by revoking every token the end user
+    # holds. This used to send three POSTs.
+    route = respx_mock.post(CLIENT_TOKENS_URL).mock(
+        side_effect=httpx.ReadTimeout("timed out waiting for the response"),
+    )
+
+    with pytest.raises(APITimeoutError):
+        client.auth.create_client_token(END_USER_ID)
+
+    assert route.call_count == 1
+    assert recorded_sleeps == []
+
+
+@pytest.mark.parametrize(
+    ("status", "code"), AMBIGUOUS_STATUS_CASES, ids=[code for _, code in AMBIGUOUS_STATUS_CASES]
+)
+def test_retryable_server_error_is_never_retried_on_a_client_token_mint(
+    client: January,
+    respx_mock: respx.MockRouter,
+    recorded_sleeps: list[float],
+    status: int,
+    code: str,
+) -> None:
+    """Treat a retryable 5xx on a mint as the ambiguous failure it is, on the status channel too."""
+    route = respx_mock.post(CLIENT_TOKENS_URL).mock(
+        return_value=httpx.Response(status, json=error_body(code)),
+    )
+
+    with pytest.raises(InternalServerError):
+        client.auth.create_client_token(END_USER_ID)
+
+    assert route.call_count == 1
+    assert recorded_sleeps == []
+
+
+def test_connect_error_is_still_retried_on_a_client_token_mint(
+    client: January, respx_mock: respx.MockRouter
+) -> None:
+    """Keep replaying failures that never reached the server, even on a mint."""
+    # As on a create: retry_ambiguous=False suppresses only the ambiguous class. A connection that
+    # was never established cannot have minted anything.
+    route = respx_mock.post(CLIENT_TOKENS_URL).mock(
+        side_effect=[
+            httpx.ConnectError("connection refused"),
+            httpx.Response(201, json=CLIENT_TOKEN_PAYLOAD),
+        ],
+    )
+
+    assert client.auth.create_client_token(END_USER_ID).token == CLIENT_TOKEN_PAYLOAD["token"]
+    assert route.call_count == 2
+
+
+def test_read_timeout_is_still_retried_on_a_client_token_revoke(
+    client: January, respx_mock: respx.MockRouter
+) -> None:
+    """Keep revocation retrying: unlike minting, doing it twice is doing it once."""
+    # The boundary of the rule above. Revocation is idempotent and becomes a no-op once nothing is
+    # left to revoke, so replaying an ambiguous failure can only finish the job - and this is the
+    # lever for a lost device, where giving up early is the expensive outcome.
+    route = respx_mock.delete(CLIENT_TOKENS_URL).mock(
+        side_effect=[httpx.ReadTimeout("timed out"), httpx.Response(204)],
+    )
+
+    client.auth.revoke_client_tokens(END_USER_ID)
+
+    assert route.call_count == 2
+
+
+@pytest.mark.anyio
+async def test_async_read_timeout_is_never_retried_on_a_client_token_mint(
+    async_client: AsyncJanuary, respx_mock: respx.MockRouter, recorded_sleeps: list[float]
+) -> None:
+    """Refuse the ambiguous replay on the asynchronous client too, on every backend."""
+    route = respx_mock.post(CLIENT_TOKENS_URL).mock(
+        side_effect=httpx.ReadTimeout("timed out waiting for the response"),
+    )
+
+    with pytest.raises(APITimeoutError):
+        await async_client.auth.create_client_token(END_USER_ID)
+
+    assert route.call_count == 1
+    assert recorded_sleeps == []
+
+
+@pytest.mark.anyio
+async def test_async_read_timeout_is_still_retried_on_a_client_token_revoke(
+    async_client: AsyncJanuary, respx_mock: respx.MockRouter
+) -> None:
+    """Keep the revocation carve-out on the asynchronous client, so the two clients agree."""
+    route = respx_mock.delete(CLIENT_TOKENS_URL).mock(
+        side_effect=[httpx.ReadTimeout("timed out"), httpx.Response(204)],
+    )
+
+    await async_client.auth.revoke_client_tokens(END_USER_ID)
+
     assert route.call_count == 2
 
 

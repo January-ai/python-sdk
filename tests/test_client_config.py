@@ -122,6 +122,28 @@ def test_surrounding_whitespace_is_stripped_from_the_api_key() -> None:
         assert client._client.api_key == "sk-test-key"
 
 
+@pytest.mark.parametrize(
+    ("api_key", "expected"),
+    [
+        pytest.param("ct-4fQr7yNb2KcXm9TvLpZ3wHs6JdRg8AeYuQ1oViB5xCn", True, id="client-token"),
+        pytest.param("sk-test", False, id="account-key"),
+        pytest.param("ct", False, id="prefixless-lookalike"),
+        pytest.param("CT-upper", False, id="wrong-case"),
+        pytest.param("pk-unknown-kind", False, id="unrecognized-prefix"),
+    ],
+)
+def test_the_credential_kind_is_read_from_its_prefix(api_key: str, expected: bool) -> None:
+    """Tell a client token from an account key, since the food-log rules differ between them."""
+    # The SDK never authenticates on this - that is the API's business - it only decides which of
+    # its own local checks apply. Anything it does not recognize answers False, so the early
+    # "end_user_id is required" error survives for every credential except a genuine ``ct-`` token.
+    with January(api_key) as sync_client:
+        assert sync_client._client.is_client_token is expected
+    # Built only to be read, never awaited: the property performs no I/O and both clients inherit
+    # it from the same base, so a divergence here would be a genuine surprise.
+    assert AsyncJanuary(api_key)._client.is_client_token is expected
+
+
 def test_a_negative_retry_budget_is_rejected() -> None:
     """Reject a negative retry budget, which has no meaning, with ``ValueError``."""
     with pytest.raises(ValueError, match="max_retries"):
@@ -146,6 +168,55 @@ def test_a_base_url_without_an_http_scheme_is_rejected_at_construction(base_url:
         January("sk-test", base_url=base_url)
     with pytest.raises(ValueError, match="http"):
         AsyncJanuary("sk-test", base_url=base_url)
+
+
+@pytest.mark.parametrize(
+    ("base_url", "expected"),
+    [
+        pytest.param("https://", "no host", id="scheme-only"),
+        pytest.param("https:///v1", "no host", id="empty-authority"),
+        pytest.param("https://api.example.com?token=abc", "query string", id="query"),
+        pytest.param("https://api.example.com#frag", "fragment", id="fragment"),
+    ],
+)
+def test_a_base_url_that_cannot_carry_a_path_is_rejected_at_construction(
+    base_url: str, expected: str
+) -> None:
+    """Refuse the four shapes that parse cleanly and then build a broken request URL."""
+    # The scheme check alone let all four through, and each produced nonsense at the first call
+    # because the SDK appends the operation path to whatever comes back:
+    #
+    #   https://                          -> https:/v1.2/credits
+    #   https:///v1                       -> https:/v1/v1.2/credits
+    #   https://api.example.com?token=abc -> https://api.example.com?token=abc/v1.2/credits
+    #   https://api.example.com#frag      -> https://api.example.com#frag/v1.2/credits
+    #
+    # The query case is the nastiest: the path lands inside the query string, so the request goes
+    # to the origin's root and the operation simply vanishes. Each error names its own problem
+    # rather than repeating the generic scheme message.
+    with pytest.raises(ValueError, match=expected):
+        January("sk-test", base_url=base_url)
+    with pytest.raises(ValueError, match=expected):
+        AsyncJanuary("sk-test", base_url=base_url)
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        pytest.param("http://localhost:8000", id="localhost"),
+        pytest.param("http://127.0.0.1:9", id="loopback"),
+        pytest.param("https://proxy.example.com/january", id="gateway-path-prefix"),
+        pytest.param("https://partners.january.ai", id="production"),
+    ],
+)
+def test_the_legitimate_base_url_shapes_still_build_a_client(base_url: str) -> None:
+    """Keep every shape the tests, examples, and real deployments actually use."""
+    # The guard above must stay narrower than "an origin and nothing else". A gateway fronting the
+    # API at a path prefix is a supported deployment, and the suite's own examples point at local
+    # servers.
+    with January("sk-test", base_url=base_url) as client:
+        assert str(client._client.base_url) == base_url
+        assert str(client._client._build_url("/v1.2/credits")) == f"{base_url}/v1.2/credits"
 
 
 def test_a_plain_http_base_url_is_still_accepted() -> None:

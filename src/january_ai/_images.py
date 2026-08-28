@@ -18,10 +18,12 @@ sixteen modules and several megabytes of codec libraries into every process that
 from __future__ import annotations
 
 import base64
+import contextlib
 import io
 import os
 import re
 import sys
+import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, cast
 
@@ -33,6 +35,8 @@ from ._constants import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from PIL import Image as PILImageModule
 
     from ._types import ImageInput
@@ -107,6 +111,12 @@ _PROCESSING_FAILED: Final = (
     "PNG and try again."
 )
 
+_DECOMPRESSION_BOMB: Final = (
+    f"the image has too many pixels to decode safely (Pillow's decompression-bomb guard rejected "
+    f"it). Downscale it below {MAX_IMAGE_DIMENSION} pixels on its longest side before passing it "
+    f"to the SDK."
+)
+
 
 def prepare_image(source: ImageInput, *, preprocess: bool = True) -> str:
     """Convert an image into the string the food-scan endpoints expect.
@@ -130,8 +140,13 @@ def prepare_image(source: ImageInput, *, preprocess: bool = True) -> str:
 
     With ``preprocess=False`` the bytes are passed through untouched: the format is sniffed from the
     leading magic bytes, the size is checked, and a GIF or WEBP has its frames counted so an
-    animation is refused here rather than by the API, but nothing is decoded, rotated, or resized.
-    Use it when the image is known to be compliant and the decode cost is not wanted.
+    animation is refused here rather than by the API, but nothing is rotated or resized and no JPEG
+    or PNG is decoded at all. Use it when the image is known to be compliant and the decode cost is
+    not wanted.
+
+    Either way, Pillow's decompression-bomb guard is enforced, including the band between
+    ``Image.MAX_IMAGE_PIXELS`` and twice it where Pillow only warns - see
+    :func:`_decompression_bomb_guard`.
 
     A ``str`` that is neither an http(s) URL nor a ``data:`` URI is read from the local filesystem.
     Never pass one that came from an end user: validate it yourself, or pass ``bytes`` instead.
@@ -147,11 +162,11 @@ def prepare_image(source: ImageInput, *, preprocess: bool = True) -> str:
         The unchanged URL or data URI, or a newly built ``data:<mime>;base64,...`` string.
 
     Raises:
-        ValueError: The data is not a decodable image, is animated, is too large to fit the byte
-            budget, is a path that exists but cannot be read (a directory, or a file this process
-            has no permission for), is a file object that is closed or already at the end of its
-            data, carries a URI scheme the SDK does not support, or is a ``PIL.Image.Image``
-            combined with ``preprocess=False``.
+        ValueError: The data is not a decodable image, is animated, has too many pixels to decode
+            safely, is too large to fit the byte budget, is a path that exists but cannot be read
+            (a directory, or a file this process has no permission for), is a file object that is
+            closed or already at the end of its data, carries a URI scheme the SDK does not
+            support, or is a ``PIL.Image.Image`` combined with ``preprocess=False``.
         TypeError: ``source`` is not one of the accepted types, or is a file object opened in text
             mode rather than binary.
         FileNotFoundError: ``source`` is a path that does not exist.
@@ -309,13 +324,42 @@ def _encode_preprocessed(data: bytes) -> str:
         raise ValueError(_PROCESSING_FAILED) from exc
 
 
+@contextlib.contextmanager
+def _decompression_bomb_guard() -> Iterator[None]:
+    """Make Pillow's decompression-bomb *warning* raise, whatever the host's warning filters say.
+
+    Pillow raises ``DecompressionBombError`` only above twice ``Image.MAX_IMAGE_PIXELS``. Between
+    one and two times the limit it merely calls ``warnings.warn``, and under Python's default
+    filters a warning is printed and discarded - so an image at 1.9x the limit decoded in full. At
+    Pillow's own default of about 89.5 megapixels that is roughly half a gigabyte of resident memory
+    for an attacker-supplied file of a few hundred kilobytes, in whatever server process called the
+    SDK. Turning the warning into an error here closes the band, and the caller sees the same
+    ``ValueError`` either side of it rather than a result that depends on how the surrounding
+    application happens to have configured ``warnings``.
+
+    ``warnings.catch_warnings`` saves and restores a process-global filter list and is not
+    thread-safe in the general case: while this block is open, another thread emitting a warning
+    sees these filters. The body is therefore kept to the decode calls themselves and nothing else,
+    so the window is as short as it can be. Raising Pillow's limit or disabling the guard is not an
+    alternative - the point is to refuse the image, not to decode it faster.
+    """
+    from PIL import Image
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", Image.DecompressionBombWarning)
+        yield
+
+
 def _open_image(data: bytes) -> PILImageModule.Image:
     """Decode the bytes with Pillow, translating its failures into ``ValueError``."""
     from PIL import Image, UnidentifiedImageError
 
     try:
-        img = Image.open(io.BytesIO(data))
-        img.load()
+        # Both calls are inside the guard: Image.open checks the declared pixel count, and load()
+        # is what actually allocates for it.
+        with _decompression_bomb_guard():
+            img = Image.open(io.BytesIO(data))
+            img.load()
     except UnidentifiedImageError as exc:
         if _is_bmff_image(data):
             raise ValueError(_HEIF_UNSUPPORTED) from exc
@@ -324,14 +368,9 @@ def _open_image(data: bytes) -> PILImageModule.Image:
             f"file is a complete image and not HTML, a PDF, or a partial download."
         ) from exc
     except (Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
-        # The warning fires between MAX_IMAGE_PIXELS and twice it, and reaches this handler only in
-        # a process that turned warnings into errors. Catching it keeps the module's documented
-        # exception set closed either way.
-        raise ValueError(
-            f"the image has too many pixels to decode safely (Pillow's decompression-bomb guard "
-            f"rejected it). Downscale it below {MAX_IMAGE_DIMENSION} pixels on its longest side "
-            f"before passing it to the SDK."
-        ) from exc
+        # The error fires above twice MAX_IMAGE_PIXELS and the warning between one and two times it;
+        # _decompression_bomb_guard is what makes the second reach this handler at all.
+        raise ValueError(_DECOMPRESSION_BOMB) from exc
     except OSError as exc:
         raise ValueError(_PROCESSING_FAILED) from exc
     return img
@@ -362,21 +401,28 @@ def _reject_animated_bytes(data: bytes, mime: str) -> None:
     Pillow cannot parse at all is left alone: the pass-through path promises not to validate the
     image, and the sniffed magic bytes have already had their say.
 
+    A decompression bomb is the one exception to that leniency, because counting frames on a GIF
+    walks and decodes them. It is not a parse failure to shrug at but a refusal to allocate, so it
+    is reported here exactly as it is on the preprocessing path rather than swallowed by the broad
+    handler below.
+
     Args:
         data: The encoded bytes about to be sent verbatim.
         mime: The MIME type sniffed from those bytes.
 
     Raises:
-        ValueError: If the image holds more than one frame.
+        ValueError: If the image holds more than one frame, or has too many pixels to open safely.
     """
     if mime not in _ANIMATABLE_MIMES:
         return
     from PIL import Image
 
     try:
-        with Image.open(io.BytesIO(data)) as img:
+        with _decompression_bomb_guard(), Image.open(io.BytesIO(data)) as img:
             image_format = str(img.format)
             counted = getattr(img, "n_frames", 1)
+    except (Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
+        raise ValueError(_DECOMPRESSION_BOMB) from exc
     except Exception:
         # A header this sniff accepted but Pillow will not parse, or a frame count it cannot walk.
         # The pass-through path does not validate images, so nothing here is worth failing over.

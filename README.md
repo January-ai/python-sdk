@@ -70,9 +70,9 @@ An `sk-` key authenticates your whole account, so keep it on machines you contro
 server-side job, a notebook on your laptop. To call the API from a phone or a browser, mint a
 [client token](#client-tokens) instead; never ship an `sk-` key inside an app.
 
-Your plan comes with a monthly credit allowance. One successful `/v1.2` call costs 1 credit and
-failed calls cost nothing. Checking the balance is itself free, always answers (including once the
-allowance is spent), and tells you when it resets:
+Your plan comes with a monthly credit allowance. Nearly every successful `/v1.2` call costs 1 credit
+and failed calls cost nothing; the exceptions are in [Credits](#credits). Checking the balance is
+itself free, always answers (including once the allowance is spent), and tells you when it resets:
 
 ```python
 from january_ai import January
@@ -206,10 +206,26 @@ rather than `None`:
 | `end_user_id="acme-user-2087"` | `acme-user-2087`, overriding the default |
 | `end_user_id=None` | no header at all, even when a default exists |
 
-**Food-log operations require an end user.** A diary belongs to somebody, so `food_logs.create`,
-`list`, `update`, and `delete` refuse to send a request without one: the SDK raises `ValueError`
-locally, before any HTTP call, when the identifier is neither passed nor defaulted, and also when
-you pass `None` explicitly, since "send no end user" is exactly what these endpoints reject.
+**Food-log operations require an end user — with an `sk-` API key.** A diary belongs to somebody,
+and an account key names nobody, so `food_logs.create`, `list`, `update`, and `delete` refuse to
+send a request without one: the SDK raises `ValueError` locally, before any HTTP call, when the
+identifier is neither passed nor defaulted, and also when you pass `None` explicitly, since "send
+no end user" is exactly what these endpoints reject for an account key.
+
+**A `ct-` client token is exempt**, because it already names its end user at mint time. On a client
+token these four operations may omit the identifier entirely; the SDK then sends no `x-end-user-id`
+header and the API reads the end user out of the token — which is the whole point of a token on a
+device that never learns your internal user ids:
+
+```python
+device = January(relayed_token)  # a ct- token minted for one end user
+logs = device.food_logs.list("2026-08-01", "2026-08-28")  # no end_user_id needed
+```
+
+Passing a value that disagrees with the token is refused by the API as `end_user_mismatch`; passing
+the matching one is fine. The SDK decides which rule applies from the credential's prefix, and a
+credential with neither prefix is treated as an API key, so the early local error survives for the
+case that actually needs it.
 
 Food-log and glucose operations also take `end_user_timezone`, an IANA name sent as
 `x-end-user-timezone`, so a "day" resolves the way the end user experiences it:
@@ -403,7 +419,8 @@ The vocabularies are closed sets, checked by your type checker before you ship:
 ### Food logs
 
 A food log is built from food and serving ids that came from a search, a scan, or a detection.
-Every food-log call needs an [end user](#end-users).
+Every food-log call names an [end user](#end-users) — explicitly, through the client default, or,
+on a client token, through the token itself.
 
 ```python
 from datetime import datetime, timezone
@@ -564,8 +581,22 @@ for dish in dishes.items:
 
 ### Credits
 
-One successful `/v1.2` call costs 1 credit. Failed calls cost nothing, and checking the balance is
-itself free: it always answers, including once the allowance is exhausted:
+Nearly every successful `/v1.2` call costs 1 credit, and failed calls cost nothing. Three
+operations are not billed at all:
+
+| Operation | Billed |
+| --- | --- |
+| `client.credits.get()` | no |
+| `client.auth.create_client_token(...)` | no |
+| `client.auth.revoke_client_tokens(...)` | no |
+| everything else, when it succeeds | 1 credit |
+
+Those three were **measured** against the live API by taking `used_credits` before and after each
+call; the published spec does not promise it. Treat it as how the API behaves today rather than as
+a contract, and do not hard-code it into your own billing or quota arithmetic — meter against
+`credits.get()` instead, which is the number January itself is using.
+
+Checking the balance always answers, including once the allowance is exhausted:
 
 ```python
 from january_ai import January

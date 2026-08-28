@@ -44,6 +44,7 @@ from ._backoff import (
     should_retry_response,
 )
 from ._constants import (
+    CLIENT_TOKEN_PREFIX,
     DEFAULT_BASE_URL,
     DEFAULT_MAX_RETRIES,
     DEFAULT_TIMEOUT,
@@ -103,10 +104,13 @@ class BaseClient:
 
     Header precedence is deliberate and worth stating outright. Assembly starts from the caller's
     ``default_headers``, then the SDK applies its own - ``Authorization``, ``Accept``,
-    ``User-Agent``, ``x-end-user-id``, and ``x-end-user-timezone`` - and finally re-applies a
-    ``User-Agent`` the caller supplied. The result is that an integrator can brand their traffic,
-    which is genuinely useful, but cannot accidentally break authentication or content negotiation
-    by setting a header they did not realize the SDK depends on.
+    ``Content-Type`` on any request that carries a body, ``User-Agent``, ``x-end-user-id``, and
+    ``x-end-user-timezone`` - and finally re-applies a ``User-Agent`` the caller supplied. The
+    result is that an integrator can brand their traffic, which is genuinely useful, but cannot
+    accidentally break authentication or content negotiation by setting a header they did not
+    realize the SDK depends on: every body this SDK sends is JSON, so a ``default_headers`` entry
+    naming some other ``Content-Type`` would describe the request wrongly to every proxy between
+    here and the API rather than change what is sent.
 
     Attributes:
         api_key: The credential sent as ``Authorization: Bearer``. Either an account key (``sk-``)
@@ -150,7 +154,8 @@ class BaseClient:
         Raises:
             JanuaryError: If no API key was given and none is in the environment.
             ValueError: If ``max_retries`` is negative, or ``base_url`` is not an http(s)
-                origin.
+                origin with a host and no query string or fragment. A path prefix, for a gateway
+                fronting the API, is allowed.
         """
         if max_retries < 0:
             raise ValueError(f"max_retries must be zero or greater; got {max_retries}")
@@ -162,6 +167,26 @@ class BaseClient:
         self.default_end_user_id = default_end_user_id
         self.default_headers = dict(default_headers) if default_headers is not None else {}
         self._rng = random.Random()
+
+    @property
+    def is_client_token(self) -> bool:
+        """Report whether this client authenticates with a client token rather than an account key.
+
+        Read from the credential's prefix - ``ct-`` for a client token, ``sk-`` for an account key -
+        which is the only thing about the value the SDK ever inspects. Authentication itself is the
+        API's business; this exists so the resource layer can tell which of its local checks apply,
+        and the one that uses it is the food-log ``end_user_id`` requirement: an account key carries
+        no user of its own and must name one, while a client token already names its end user and
+        may omit the header entirely.
+
+        An unrecognized prefix answers ``False`` on purpose. Guessing "client token" for an unknown
+        shape would drop the early, local error that catches the common mistake of forgetting
+        ``end_user_id`` with an ``sk-`` key; guessing "account key" only keeps it.
+
+        Returns:
+            ``True`` when the configured credential is a ``ct-`` client token.
+        """
+        return self.api_key.startswith(CLIENT_TOKEN_PREFIX)
 
     def _build_url(self, path: str) -> httpx.URL:
         """Append an operation path to the base URL.
@@ -179,9 +204,9 @@ class BaseClient:
         """Assemble the headers for one request.
 
         The caller's ``default_headers`` are applied first and the SDK's own headers are applied
-        over them, so ``Authorization`` and ``Accept`` always describe what the SDK is actually
-        doing. The one exception is ``User-Agent``: a value the caller supplied is put back
-        afterwards, letting an integrator identify their own traffic.
+        over them, so ``Authorization``, ``Accept``, and ``Content-Type`` always describe what the
+        SDK is actually doing. The one exception is ``User-Agent``: a value the caller supplied is
+        put back afterwards, letting an integrator identify their own traffic.
 
         ``x-end-user-id`` follows the three-way rule the SDK uses everywhere. Omitted means "use
         the client default", an explicit ``None`` means "send no end user at all" and suppresses
@@ -210,6 +235,14 @@ class BaseClient:
         _set_header(headers, "Accept", "application/json")
         _set_header(headers, "User-Agent", user_agent if user_agent is not None else _USER_AGENT)
 
+        if spec.json_body is not None:
+            # Every body this SDK sends is JSON, so the header describing it is the SDK's to set,
+            # exactly like Authorization and Accept. Left to httpx it would sit under the caller's
+            # default_headers instead, and default_headers={"Content-Type": "text/plain"} would
+            # ship a JSON body advertised as text - which the API happens to tolerate today, but
+            # which any stricter deployment or proxy in the path is entitled to reject.
+            _set_header(headers, "Content-Type", "application/json")
+
         end_user_id = self._resolve_end_user_id(spec.end_user_id)
         if end_user_id is not None:
             _check_header_value(end_user_id, argument="end_user_id", header="x-end-user-id")
@@ -225,7 +258,9 @@ class BaseClient:
             )
             _set_header(headers, "x-end-user-timezone", spec.end_user_timezone)
 
-        # Content-Type is left to httpx, which sets application/json exactly when a body is sent.
+        # Content-Type is pinned above on requests that carry a body and deliberately left off the
+        # rest: a GET or a DELETE sends nothing, so it has no content to type. httpx would set the
+        # header itself for a body, but only where the caller had not already claimed the name.
         return headers
 
     def _resolve_end_user_id(self, end_user_id: str | NotGiven | None) -> str | None:
@@ -526,7 +561,8 @@ class SyncAPIClient(BaseClient):
         Raises:
             JanuaryError: If no API key was given and none is in the environment.
             ValueError: If ``max_retries`` is negative, or ``base_url`` is not an http(s)
-                origin.
+                origin with a host and no query string or fragment. A path prefix, for a gateway
+                fronting the API, is allowed.
         """
         super().__init__(
             api_key,
@@ -689,7 +725,8 @@ class AsyncAPIClient(BaseClient):
         Raises:
             JanuaryError: If no API key was given and none is in the environment.
             ValueError: If ``max_retries`` is negative, or ``base_url`` is not an http(s)
-                origin.
+                origin with a host and no query string or fragment. A path prefix, for a gateway
+                fronting the API, is allowed.
         """
         super().__init__(
             api_key,
@@ -831,6 +868,17 @@ def _resolve_api_key(api_key: str | None) -> str:
 def _normalize_base_url(base_url: str | httpx.URL | None) -> httpx.URL:
     """Resolve the API origin from the argument, the environment, or the production default.
 
+    Every operation path is appended to whatever comes back here, so anything this function lets
+    through unexamined becomes a malformed request URL at the first call instead of a message about
+    the configuration. Three shapes parse cleanly and then do exactly that, and all three are
+    refused: a scheme with no host (``https://``, ``https:///v1``), a query string, and a fragment.
+    The query is the worst of them - append ``/v1.2/credits`` to ``https://api.example.com?token=abc``
+    and the operation path lands inside the query, so the request goes to the origin's root.
+
+    A path prefix is not one of them and stays allowed: a gateway at
+    ``https://proxy.example.com/january`` fronting the API is a legitimate deployment, and the SDK
+    appends ``/v1.2/...`` after the prefix. So is a trailing slash, which is stripped.
+
     Args:
         base_url: The origin passed to the constructor, if any.
 
@@ -839,9 +887,10 @@ def _normalize_base_url(base_url: str | httpx.URL | None) -> httpx.URL:
         without producing a double slash.
 
     Raises:
-        ValueError: If the origin names a scheme other than ``http`` or ``https``, or omits one.
+        ValueError: If the origin names a scheme other than ``http`` or ``https``, or omits one -
             ``january.ai`` with the scheme forgotten would otherwise be accepted and then fail at
-            the first request with something that does not point back at the configuration.
+            the first request with something that does not point back at the configuration - or if
+            it names no host, or carries a query string or a fragment.
     """
     text = str(base_url).strip() if base_url is not None else ""
     if not text:
@@ -853,6 +902,27 @@ def _normalize_base_url(base_url: str | httpx.URL | None) -> httpx.URL:
     if url.scheme not in ("http", "https"):
         raise ValueError(
             f"base_url must be an http(s) origin such as https://partners.january.ai; got {text!r}."
+        )
+    if not url.host:
+        raise ValueError(
+            f"base_url names no host, so no request can be addressed with it. Pass an origin such "
+            f"as https://partners.january.ai, optionally with a path prefix "
+            f"(https://proxy.example.com/january); got {text!r}."
+        )
+    if url.query:
+        raise ValueError(
+            f"base_url must not carry a query string: the SDK appends the operation path to it, "
+            f"which would land inside the query rather than after the host. Pass an origin such "
+            f"as https://partners.january.ai, optionally with a path prefix "
+            f"(https://proxy.example.com/january), and send per-request parameters through the "
+            f"operation instead; got {text!r}."
+        )
+    if url.fragment:
+        raise ValueError(
+            f"base_url must not carry a fragment: it is never sent to a server, and the SDK "
+            f"appends the operation path after it. Pass an origin such as "
+            f"https://partners.january.ai, optionally with a path prefix "
+            f"(https://proxy.example.com/january); got {text!r}."
         )
     return url
 

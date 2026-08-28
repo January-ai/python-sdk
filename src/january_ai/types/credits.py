@@ -26,8 +26,10 @@ class CreditsResponse(JanuaryModel):
     included_credits: int | None = None
     used_credits: int = Field(
         description=(
-            "Credits used so far this period. One successful v1.2 API call costs 1 credit; "
-            "failed calls cost nothing."
+            "Credits used so far this period. Nearly every successful v1.2 API call costs 1 "
+            "credit; failed calls cost nothing. This endpoint and the two auth endpoints were "
+            "measured as unbilled, which is observed behaviour rather than a documented "
+            "guarantee."
         )
     )
     remaining_credits: int | None = None

@@ -36,9 +36,13 @@ class Credits:
 
     Reached as ``client.credits``.
 
-    Every successful v1.2 API call costs one credit; requests that fail cost nothing, and v1.1
-    calls are not counted. Checking the balance is itself free and always answers, including once
-    the allowance is exhausted.
+    Nearly every successful v1.2 API call costs one credit; requests that fail cost nothing, and
+    v1.1 calls are not counted. Three operations were measured against the live API and billed
+    nothing: :meth:`get` itself, which always answers including once the allowance is exhausted,
+    and both :class:`~january_ai.resources.auth.Auth` operations - minting and revoking client
+    tokens. That was observed rather than promised by the published spec, so treat it as how the
+    API behaves today and not as a contract: bill your own users off your own accounting rather
+    than off an assumption about which January calls are free.
 
     Example:
         Warn before a batch job runs into the ceiling::
@@ -66,6 +70,11 @@ class Credits:
         ``credit_limit_exceeded`` until the allowance resets, which the SDK raises as
         :class:`~january_ai.CreditLimitExceededError` and never retries, because retrying cannot
         help before the reset.
+
+        This call is not billed, and neither are the two ``auth`` operations - minting and revoking
+        a client token. That was measured against the live API rather than promised by the published
+        spec, so do not hard-code it: meter your own usage against this endpoint, which reports the
+        number January is actually charging you.
 
         Args:
             end_user_id: Your identifier for the end user this call acts on behalf of. Omit to
@@ -111,6 +120,11 @@ class AsyncCredits:
         ``credit_limit_exceeded`` until the allowance resets, which the SDK raises as
         :class:`~january_ai.CreditLimitExceededError` and never retries, because retrying cannot
         help before the reset.
+
+        This call is not billed, and neither are the two ``auth`` operations - minting and revoking
+        a client token. That was measured against the live API rather than promised by the published
+        spec, so do not hard-code it: meter your own usage against this endpoint, which reports the
+        number January is actually charging you.
 
         Args:
             end_user_id: Your identifier for the end user this call acts on behalf of. Omit to

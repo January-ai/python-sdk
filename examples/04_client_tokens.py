@@ -12,7 +12,9 @@ Usage:
     export JANUARY_API_KEY=sk-...
     python examples/04_client_tokens.py
 
-Cost: 3 credits - mint, one call made with the token, revoke. Failed calls cost nothing.
+Cost: 1 credit - the food search made with the token. Minting and revoking were measured against
+the live API as unbilled, though the published spec does not promise that. Failed calls cost
+nothing.
 """
 
 from __future__ import annotations

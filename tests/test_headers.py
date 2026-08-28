@@ -16,12 +16,14 @@ socket is opened, not after a round trip.
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 
 import httpx
 import pytest
 import respx
 
 from january_ai import NOT_GIVEN, AsyncJanuary, January, NotGiven, __version__
+from january_ai.types import FoodSelectionParam
 
 from .conftest import ClientFactory
 
@@ -41,6 +43,10 @@ CREDITS_PAYLOAD: dict[str, object] = {
     "used_credits": 342,
     "remaining_credits": 658,
 }
+
+FOODS_LOGGED: Sequence[FoodSelectionParam] = [
+    {"id": 101963552, "serving": {"id": 68051535, "quantity": 1.0}}
+]
 
 FOOD_SEARCH_PAYLOAD: dict[str, object] = {"total_count": 0, "items": []}
 FOOD_LOG_LIST_PAYLOAD: dict[str, object] = {"total_count": 0, "items": []}
@@ -286,6 +292,43 @@ def test_default_headers_are_sent_but_cannot_clobber_authorization(
     assert request.headers["authorization"] == "Bearer sk-test"
     assert request.headers["accept"] == "application/json"
     assert request.headers.get_list("authorization") == ["Bearer sk-test"]
+
+
+def test_default_headers_cannot_clobber_the_content_type_of_a_json_body(
+    make_client: ClientFactory, respx_mock: respx.MockRouter
+) -> None:
+    """Describe a JSON body as JSON, whatever the caller pinned in ``default_headers``."""
+    # Content-Type used to be left to httpx, which sets it only where nothing has claimed the name
+    # already - so default_headers={"Content-Type": "text/plain"} shipped a JSON body advertised as
+    # text. The body never changed; only the label did, which is the worst of both. The API happens
+    # to tolerate it today, but any proxy or stricter deployment in the path is entitled to reject
+    # it, and the caller gets a protocol violation they did not ask for and cannot see.
+    client = make_client(default_headers={"Content-Type": "text/plain", "X-Tenant": "acme"})
+    route = respx_mock.post(FOOD_LOGS_URL).mock(
+        return_value=httpx.Response(201, json=FOOD_LOG_PAYLOAD),
+    )
+
+    client.food_logs.create(FOODS_LOGGED, end_user_id=END_USER_ID)
+
+    request = last_request(route)
+    assert request.headers["content-type"] == "application/json"
+    assert request.headers.get_list("content-type") == ["application/json"]
+    assert (
+        request.content == b'{"foods":[{"id":101963552,"serving":{"id":68051535,"quantity":1.0}}]}'
+    )
+    # The headers the SDK does not claim are still the caller's to set.
+    assert request.headers["x-tenant"] == "acme"
+
+
+def test_a_request_with_no_body_advertises_no_content_type(
+    client: January, respx_mock: respx.MockRouter
+) -> None:
+    """Leave Content-Type off a GET, which has no content to type."""
+    route = respx_mock.get(CREDITS_URL).mock(return_value=credits_response())
+
+    client.credits.get()
+
+    assert "content-type" not in last_request(route).headers
 
 
 def test_default_headers_may_override_the_user_agent(

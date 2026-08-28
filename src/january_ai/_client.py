@@ -126,7 +126,8 @@ class January:
         Raises:
             JanuaryError: If no API key was given and none is in the environment.
             ValueError: If ``max_retries`` is negative, or ``base_url`` is not an http(s)
-                origin.
+                origin with a host and no query string or fragment. A path prefix, for a gateway
+                fronting the API, is allowed.
         """
         self._client = SyncAPIClient(
             api_key,
@@ -262,7 +263,8 @@ class AsyncJanuary:
         Raises:
             JanuaryError: If no API key was given and none is in the environment.
             ValueError: If ``max_retries`` is negative, or ``base_url`` is not an http(s)
-                origin.
+                origin with a host and no query string or fragment. A path prefix, for a gateway
+                fronting the API, is allowed.
         """
         self._client = AsyncAPIClient(
             api_key,

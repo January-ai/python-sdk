@@ -1,9 +1,15 @@
 """The end user's meal history: create, list, update, and delete food logs.
 
-Every operation here is per-end-user, so the API requires the ``x-end-user-id`` header on all four
-rather than treating it as optional context. The SDK checks for it locally and raises before a
-request is built, since a missing identifier is a mistake in the calling code and finding that out
-from a round trip is slower and less clear than finding it out from a ``ValueError``.
+Every operation here is per-end-user, so the request has to say which one. With an ``sk-`` API key,
+which carries no user of its own, that means the ``x-end-user-id`` header on all four operations,
+and the SDK checks for it locally and raises before a request is built: a missing identifier is a
+mistake in the calling code, and finding that out from a round trip is slower and less clear than
+finding it out from a ``ValueError``.
+
+A ``ct-`` client token is the other case. It already names its end user, so the API accepts these
+calls with no ``x-end-user-id`` at all - and refuses one that disagrees with the token, as
+``end_user_mismatch``. The local check follows the credential rather than applying to everyone, so
+a device holding a token can call these endpoints the way the API documents.
 """
 
 from __future__ import annotations
@@ -36,23 +42,37 @@ def _log_path(log_id: str) -> str:
     return f"{_FOOD_LOGS_PATH}/{quote(log_id, safe='')}"
 
 
-def _require_end_user_id(client: BaseClient, end_user_id: str | NotGiven | None) -> str:
-    """Resolve the end user for a food log operation, refusing to send a request without one.
+def _require_end_user_id(client: BaseClient, end_user_id: str | NotGiven | None) -> str | None:
+    """Resolve the end user for a food log operation, refusing to send an unaddressable request.
+
+    Whether an identifier is genuinely required depends on the credential, which is why this is not
+    a flat check. The API's own description of ``x-end-user-id`` on these operations says it is
+    "Required with an API key, which carries no user of its own. A client token already names its
+    end user, so it may omit this header - but a value that disagrees with the token is refused with
+    ``end_user_mismatch``." An ``sk-`` key therefore still gets the local ``ValueError``, which
+    catches the common mistake before a round trip; a ``ct-`` token sends no header and the API
+    reads the end user out of the token, which is exactly the device-side case client tokens exist
+    for. A credential whose prefix is neither is treated as an API key - see
+    :attr:`~january_ai._base_client.BaseClient.is_client_token`.
 
     Args:
-        client: The client whose ``default_end_user_id`` fills in an omitted argument.
+        client: The client whose ``default_end_user_id`` fills in an omitted argument, and whose
+            credential decides whether an identifier is required at all.
         end_user_id: The value the call supplied, which may be the omitted sentinel.
 
     Returns:
-        The identifier to send in ``x-end-user-id``.
+        The identifier to send in ``x-end-user-id``, or ``None`` to send no such header, which
+        only happens on a client token.
 
     Raises:
-        ValueError: If the call omitted the identifier and the client has no default, or if the
-            call passed ``None`` explicitly. ``None`` means "send no end user", which these
-            endpoints reject.
+        ValueError: If no identifier resolves - the call omitted it and the client has no default,
+            or the call passed ``None`` explicitly - and the client authenticates with an API key,
+            for which "send no end user" is exactly what these endpoints reject.
     """
     resolved = client.default_end_user_id if isinstance(end_user_id, NotGiven) else end_user_id
     if not resolved:
+        if client.is_client_token:
+            return None
         raise ValueError(_END_USER_ID_REQUIRED)
     return resolved
 
@@ -171,10 +191,15 @@ class FoodLogs:
     """An end user's logged meals: create, list, update, and delete.
 
     Reached as ``client.food_logs``. Every operation names an end user, either through
-    ``end_user_id`` or through the client's ``default_end_user_id``; without one the SDK raises
-    ``ValueError`` rather than sending a request the API would reject. With a client token, reads
-    need the ``food_logs:read`` scope and writes need ``food_logs:write``; the token already names
-    its end user, so an ``end_user_id`` that disagrees with it is refused as ``end_user_mismatch``.
+    ``end_user_id`` or through the client's ``default_end_user_id``; with an ``sk-`` API key,
+    which carries no user of its own, the SDK raises ``ValueError`` when neither supplies one
+    rather than sending a request the API would reject.
+
+    A client token is the exception: it already names its end user at mint time, so these calls may
+    omit the identifier entirely and the SDK sends no ``x-end-user-id`` header when they do. Passing
+    one that disagrees with the token is refused by the API as ``end_user_mismatch``, and passing
+    the matching one is fine. Reads with a token need the ``food_logs:read`` scope and writes need
+    ``food_logs:write``.
     """
 
     def __init__(self, client: SyncAPIClient) -> None:
@@ -210,7 +235,8 @@ class FoodLogs:
                 ISO 8601 offset is accepted and the log is stored and returned in UTC. Omitted
                 means now.
             end_user_id: The end user the log belongs to. Omitted uses the client's
-                ``default_end_user_id``.
+                ``default_end_user_id``; on a client token, resolving to nothing sends no header
+                and the API reads the end user out of the token.
             end_user_timezone: The end user's IANA timezone, forwarded upstream for local-day date
                 handling.
             timeout: Override the timeout for this call.
@@ -219,7 +245,8 @@ class FoodLogs:
             The created log, with every food resolved against the database.
 
         Raises:
-            ValueError: If no end user resolves, or if ``timestamp_utc`` is a naive ``datetime``.
+            ValueError: If no end user resolves and this client uses an API key rather than a
+                client token, or if ``timestamp_utc`` is a naive ``datetime``.
             APIStatusError: If the API rejects the request.
         """
         return cast(
@@ -258,7 +285,8 @@ class FoodLogs:
                 string.
             end: Last day of the range, in the same forms. May equal ``start``.
             end_user_id: The end user whose logs to read. Omitted uses the client's
-                ``default_end_user_id``.
+                ``default_end_user_id``; on a client token, resolving to nothing sends no header
+                and the API reads the end user out of the token.
             end_user_timezone: The end user's IANA timezone, forwarded upstream for local-day date
                 handling.
             timeout: Override the timeout for this call.
@@ -267,7 +295,8 @@ class FoodLogs:
             The logs in the range. An empty list is a valid result, not an error.
 
         Raises:
-            ValueError: If no end user resolves.
+            ValueError: If no end user resolves and this client uses an API key rather than a
+                client token.
             APIStatusError: If the API rejects the request, including a 400 when the range is
                 inverted.
         """
@@ -312,7 +341,8 @@ class FoodLogs:
                 omitting the field. At most 256 characters.
             timestamp_utc: A replacement consumption time. A ``datetime`` must be timezone-aware.
             end_user_id: The end user the log belongs to. Omitted uses the client's
-                ``default_end_user_id``.
+                ``default_end_user_id``; on a client token, resolving to nothing sends no header
+                and the API reads the end user out of the token.
             end_user_timezone: The end user's IANA timezone, forwarded upstream for local-day date
                 handling.
             timeout: Override the timeout for this call.
@@ -321,7 +351,8 @@ class FoodLogs:
             The updated log.
 
         Raises:
-            ValueError: If no end user resolves, or if ``timestamp_utc`` is a naive ``datetime``.
+            ValueError: If no end user resolves and this client uses an API key rather than a
+                client token, or if ``timestamp_utc`` is a naive ``datetime``.
             APIStatusError: If the API rejects the request, including a 404 when this end user has
                 no log with that id.
         """
@@ -357,7 +388,8 @@ class FoodLogs:
         Args:
             log_id: The id returned when the log was created.
             end_user_id: The end user the log belongs to. Omitted uses the client's
-                ``default_end_user_id``.
+                ``default_end_user_id``; on a client token, resolving to nothing sends no header
+                and the API reads the end user out of the token.
             end_user_timezone: The end user's IANA timezone, forwarded upstream for local-day date
                 handling.
             timeout: Override the timeout for this call.
@@ -367,7 +399,8 @@ class FoodLogs:
             is a value to inspect.
 
         Raises:
-            ValueError: If no end user resolves.
+            ValueError: If no end user resolves and this client uses an API key rather than a
+                client token.
             APIStatusError: If the API rejects the request, including a 400 when ``log_id`` is not
                 a UUID.
         """
@@ -389,10 +422,15 @@ class AsyncFoodLogs:
     """An end user's logged meals: create, list, update, and delete.
 
     Reached as ``client.food_logs``. Every operation names an end user, either through
-    ``end_user_id`` or through the client's ``default_end_user_id``; without one the SDK raises
-    ``ValueError`` rather than sending a request the API would reject. With a client token, reads
-    need the ``food_logs:read`` scope and writes need ``food_logs:write``; the token already names
-    its end user, so an ``end_user_id`` that disagrees with it is refused as ``end_user_mismatch``.
+    ``end_user_id`` or through the client's ``default_end_user_id``; with an ``sk-`` API key,
+    which carries no user of its own, the SDK raises ``ValueError`` when neither supplies one
+    rather than sending a request the API would reject.
+
+    A client token is the exception: it already names its end user at mint time, so these calls may
+    omit the identifier entirely and the SDK sends no ``x-end-user-id`` header when they do. Passing
+    one that disagrees with the token is refused by the API as ``end_user_mismatch``, and passing
+    the matching one is fine. Reads with a token need the ``food_logs:read`` scope and writes need
+    ``food_logs:write``.
     """
 
     def __init__(self, client: AsyncAPIClient) -> None:
@@ -428,7 +466,8 @@ class AsyncFoodLogs:
                 ISO 8601 offset is accepted and the log is stored and returned in UTC. Omitted
                 means now.
             end_user_id: The end user the log belongs to. Omitted uses the client's
-                ``default_end_user_id``.
+                ``default_end_user_id``; on a client token, resolving to nothing sends no header
+                and the API reads the end user out of the token.
             end_user_timezone: The end user's IANA timezone, forwarded upstream for local-day date
                 handling.
             timeout: Override the timeout for this call.
@@ -437,7 +476,8 @@ class AsyncFoodLogs:
             The created log, with every food resolved against the database.
 
         Raises:
-            ValueError: If no end user resolves, or if ``timestamp_utc`` is a naive ``datetime``.
+            ValueError: If no end user resolves and this client uses an API key rather than a
+                client token, or if ``timestamp_utc`` is a naive ``datetime``.
             APIStatusError: If the API rejects the request.
         """
         return cast(
@@ -476,7 +516,8 @@ class AsyncFoodLogs:
                 string.
             end: Last day of the range, in the same forms. May equal ``start``.
             end_user_id: The end user whose logs to read. Omitted uses the client's
-                ``default_end_user_id``.
+                ``default_end_user_id``; on a client token, resolving to nothing sends no header
+                and the API reads the end user out of the token.
             end_user_timezone: The end user's IANA timezone, forwarded upstream for local-day date
                 handling.
             timeout: Override the timeout for this call.
@@ -485,7 +526,8 @@ class AsyncFoodLogs:
             The logs in the range. An empty list is a valid result, not an error.
 
         Raises:
-            ValueError: If no end user resolves.
+            ValueError: If no end user resolves and this client uses an API key rather than a
+                client token.
             APIStatusError: If the API rejects the request, including a 400 when the range is
                 inverted.
         """
@@ -530,7 +572,8 @@ class AsyncFoodLogs:
                 omitting the field. At most 256 characters.
             timestamp_utc: A replacement consumption time. A ``datetime`` must be timezone-aware.
             end_user_id: The end user the log belongs to. Omitted uses the client's
-                ``default_end_user_id``.
+                ``default_end_user_id``; on a client token, resolving to nothing sends no header
+                and the API reads the end user out of the token.
             end_user_timezone: The end user's IANA timezone, forwarded upstream for local-day date
                 handling.
             timeout: Override the timeout for this call.
@@ -539,7 +582,8 @@ class AsyncFoodLogs:
             The updated log.
 
         Raises:
-            ValueError: If no end user resolves, or if ``timestamp_utc`` is a naive ``datetime``.
+            ValueError: If no end user resolves and this client uses an API key rather than a
+                client token, or if ``timestamp_utc`` is a naive ``datetime``.
             APIStatusError: If the API rejects the request, including a 404 when this end user has
                 no log with that id.
         """
@@ -575,7 +619,8 @@ class AsyncFoodLogs:
         Args:
             log_id: The id returned when the log was created.
             end_user_id: The end user the log belongs to. Omitted uses the client's
-                ``default_end_user_id``.
+                ``default_end_user_id``; on a client token, resolving to nothing sends no header
+                and the API reads the end user out of the token.
             end_user_timezone: The end user's IANA timezone, forwarded upstream for local-day date
                 handling.
             timeout: Override the timeout for this call.
@@ -585,7 +630,8 @@ class AsyncFoodLogs:
             is a value to inspect.
 
         Raises:
-            ValueError: If no end user resolves.
+            ValueError: If no end user resolves and this client uses an API key rather than a
+                client token.
             APIStatusError: If the API rejects the request, including a 400 when ``log_id`` is not
                 a UUID.
         """

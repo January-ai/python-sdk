@@ -11,8 +11,47 @@ env:
   UV_FROZEN: "1"
 
 jobs:
+  # A tag can be pushed onto any commit, including one CI never ran or one that went red, and a
+  # PyPI upload can never be taken back. So the release re-runs the same gate CI runs before it
+  # builds anything: the same lint, the same type check, the same suite, on the oldest and the
+  # newest interpreter the package claims to support.
+  verify:
+    name: verify (python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor from requires-python and the newest classifier in pyproject.toml. Between them
+        # they catch the version-dependent failures worth catching before an irreversible upload.
+        python-version: ["3.10", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.3"
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - run: uv sync --frozen
+
+      - name: ruff check
+        run: uv run ruff check .
+
+      - name: ruff format --check
+        run: uv run ruff format --check .
+
+      - name: mypy --strict
+        run: uv run mypy src tests examples
+
+      - name: pytest
+        run: uv run pytest
+
   build:
     name: build
+    needs: verify
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
