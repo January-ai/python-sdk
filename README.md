@@ -1,9 +1,9 @@
 # january-ai
 
 [![PyPI version](https://img.shields.io/pypi/v/january-ai.svg)](https://pypi.org/project/january-ai/)
-[![CI](https://img.shields.io/github/actions/workflow/status/januaryai/python-sdk/ci.yml?branch=main&label=CI)](https://github.com/januaryai/python-sdk/actions/workflows/ci.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/January-ai/python-sdk/ci.yml?branch=main&label=CI)](https://github.com/January-ai/python-sdk/actions/workflows/ci.yml)
 [![Python versions](https://img.shields.io/pypi/pyversions/january-ai.svg)](https://pypi.org/project/january-ai/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/januaryai/python-sdk/blob/main/LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/January-ai/python-sdk/blob/main/LICENSE)
 
 The official Python SDK for the [January AI](https://january.ai) nutrition intelligence API: one
 API for understanding what people eat and how food may affect them. It ships a blocking client and
@@ -98,7 +98,7 @@ uv add january-ai
 > checkout:
 >
 > ```bash
-> git clone https://github.com/januaryai/python-sdk
+> git clone https://github.com/January-ai/python-sdk
 > cd python-sdk
 > pip install .
 > ```
@@ -628,7 +628,7 @@ most 500 tokens, so call it again if a user somehow holds more. Both `auth` meth
 ## Recipes
 
 The multi-step flows a real integration needs: too long for the quickstart, too short for an
-[example file](https://github.com/januaryai/python-sdk/tree/main/examples).
+[example file](https://github.com/January-ai/python-sdk/tree/main/examples).
 
 ### Scan a photo, correct it, then log it
 
@@ -1128,12 +1128,12 @@ a major release. Names prefixed with an underscore are internal and may change a
 in `january_ai.types` describe the `/v1.2` schemas. A future API version will arrive as a new SDK
 major release rather than by changing what this one sends.
 
-Release notes live in [CHANGELOG.md](https://github.com/januaryai/python-sdk/blob/main/CHANGELOG.md).
+Release notes live in [CHANGELOG.md](https://github.com/January-ai/python-sdk/blob/main/CHANGELOG.md).
 
 ## Development
 
 ```bash
-git clone https://github.com/januaryai/python-sdk
+git clone https://github.com/January-ai/python-sdk
 cd python-sdk
 uv sync
 
@@ -1143,28 +1143,28 @@ uv run ruff format . # format
 uv run mypy          # type-check, strict, over src/ tests/ examples/
 ```
 
-Runnable examples live in [`examples/`](https://github.com/januaryai/python-sdk/tree/main/examples):
+Runnable examples live in [`examples/`](https://github.com/January-ai/python-sdk/tree/main/examples):
 
 | Example | Shows |
 | --- | --- |
-| [`01_scan_photo.py`](https://github.com/januaryai/python-sdk/blob/main/examples/01_scan_photo.py) | Recognizing a meal from a photo, and correcting it |
-| [`02_search_and_log.py`](https://github.com/januaryai/python-sdk/blob/main/examples/02_search_and_log.py) | Searching foods, picking a serving, logging a meal |
-| [`03_glucose_prediction.py`](https://github.com/januaryai/python-sdk/blob/main/examples/03_glucose_prediction.py) | Predicting a glucose curve for a meal |
-| [`04_client_tokens.py`](https://github.com/januaryai/python-sdk/blob/main/examples/04_client_tokens.py) | Minting and revoking client tokens for a device |
-| [`05_async_concurrent_scans.py`](https://github.com/januaryai/python-sdk/blob/main/examples/05_async_concurrent_scans.py) | Scanning several photos concurrently with `asyncio.gather` |
+| [`01_scan_photo.py`](https://github.com/January-ai/python-sdk/blob/main/examples/01_scan_photo.py) | Recognizing a meal from a photo, and correcting it |
+| [`02_search_and_log.py`](https://github.com/January-ai/python-sdk/blob/main/examples/02_search_and_log.py) | Searching foods, picking a serving, logging a meal |
+| [`03_glucose_prediction.py`](https://github.com/January-ai/python-sdk/blob/main/examples/03_glucose_prediction.py) | Predicting a glucose curve for a meal |
+| [`04_client_tokens.py`](https://github.com/January-ai/python-sdk/blob/main/examples/04_client_tokens.py) | Minting and revoking client tokens for a device |
+| [`05_async_concurrent_scans.py`](https://github.com/January-ai/python-sdk/blob/main/examples/05_async_concurrent_scans.py) | Scanning several photos concurrently with `asyncio.gather` |
 
 ## Contributing
 
-Contributions are welcome. [CONTRIBUTING.md](https://github.com/januaryai/python-sdk/blob/main/CONTRIBUTING.md)
+Contributions are welcome. [CONTRIBUTING.md](https://github.com/January-ai/python-sdk/blob/main/CONTRIBUTING.md)
 covers the sync/async parity rule and how models map to the OpenAPI spec. To report a vulnerability,
-see [SECURITY.md](https://github.com/januaryai/python-sdk/blob/main/SECURITY.md).
+see [SECURITY.md](https://github.com/January-ai/python-sdk/blob/main/SECURITY.md).
 
 ## Support
 
 - Questions about the API or your account: [support@january.ai](mailto:support@january.ai)
 - Community: [Discord](https://discord.gg/cYQeh3UnC)
-- Bugs in this SDK: [GitHub issues](https://github.com/januaryai/python-sdk/issues)
+- Bugs in this SDK: [GitHub issues](https://github.com/January-ai/python-sdk/issues)
 
 ## License
 
-MIT. See [LICENSE](https://github.com/januaryai/python-sdk/blob/main/LICENSE).
+MIT. See [LICENSE](https://github.com/January-ai/python-sdk/blob/main/LICENSE).

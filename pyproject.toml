@@ -33,8 +33,8 @@ dependencies = [
 [project.urls]
 Homepage = "https://january.ai"
 Documentation = "https://docs.january.ai"
-Repository = "https://github.com/januaryai/python-sdk"
-Issues = "https://github.com/januaryai/python-sdk/issues"
+Repository = "https://github.com/January-ai/python-sdk"
+Issues = "https://github.com/January-ai/python-sdk/issues"
 
 [tool.hatch.version]
 path = "src/january_ai/_version.py"

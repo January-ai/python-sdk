@@ -1,6 +1,6 @@
 """Tests for the models in :mod:`january_ai.types` and the input serializers behind them.
 
-The models are a transcription of ``.spec/openapi.json``, so most of what is worth checking can be
+The models are a transcription of ``spec/openapi.json``, so most of what is worth checking can be
 checked against the spec itself rather than against a second hand-written copy of it. The tests
 below load the schema file and drive from it: every schema must have a model under the documented
 name, every model must accept a realistic payload covering every property the schema declares, and
@@ -25,7 +25,7 @@ from january_ai._serialize import serialize_detections, to_iso_date, to_iso_date
 from january_ai.types import CorrectScan, Detection, Food, ScanResult
 from january_ai.types._base import JanuaryModel
 
-SPEC_PATH: Final = Path(__file__).resolve().parent.parent / ".spec" / "openapi.json"
+SPEC_PATH: Final = Path(__file__).resolve().parent.parent / "spec" / "openapi.json"
 
 
 # --------------------------------------------------------------------------------------------
@@ -35,6 +35,15 @@ SPEC_PATH: Final = Path(__file__).resolve().parent.parent / ".spec" / "openapi.j
 
 def _load_schemas() -> dict[str, dict[str, object]]:
     """Read every component schema out of the checked-in OpenAPI document."""
+    # The spec is tracked in git precisely so this runs in CI. If it ever goes missing, say why
+    # rather than failing collection with a bare FileNotFoundError.
+    if not SPEC_PATH.exists():
+        raise RuntimeError(
+            f"the vendored OpenAPI spec is missing from {SPEC_PATH}. It is committed to the "
+            "repository because these tests check every model against it; restore it with "
+            "'git checkout spec/openapi.json', or re-download it from "
+            "https://partners.january.ai/v1.2/openapi.json."
+        )
     with SPEC_PATH.open(encoding="utf-8") as handle:
         document: object = json.load(handle)
     assert isinstance(document, dict)

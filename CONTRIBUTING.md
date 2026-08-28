@@ -9,7 +9,7 @@ source of truth for models.
 The project uses [uv](https://docs.astral.sh/uv/) for dependency management and packaging.
 
 ```bash
-git clone https://github.com/januaryai/python-sdk
+git clone https://github.com/January-ai/python-sdk
 cd python-sdk
 uv sync
 ```

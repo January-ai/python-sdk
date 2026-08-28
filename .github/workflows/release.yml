@@ -86,7 +86,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     # Trusted Publishing: PyPI verifies this workflow's OIDC identity, so there is no API token to
-    # store, leak, or rotate. Configure the publisher for januaryai/python-sdk, release.yml, and the
+    # store, leak, or rotate. Configure the publisher for January-ai/python-sdk, release.yml, and the
     # pypi environment at https://pypi.org/manage/project/january-ai/settings/publishing/
     environment:
       name: pypi

@@ -33,7 +33,7 @@ publicly.
 For a vulnerability in the January AI **API itself** rather than this SDK, the same address is the
 right one. For anything that is not a security issue, use
 [support@january.ai](mailto:support@january.ai) or the
-[issue tracker](https://github.com/januaryai/python-sdk/issues).
+[issue tracker](https://github.com/January-ai/python-sdk/issues).
 
 ## Supported versions
 

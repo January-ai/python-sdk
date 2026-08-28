@@ -26,5 +26,3 @@ coverage.xml
 # OS
 .DS_Store
 
-# Vendored OpenAPI spec dump: a working artifact, not source
-.spec/

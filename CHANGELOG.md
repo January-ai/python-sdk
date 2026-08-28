@@ -167,5 +167,5 @@ targeting API version `/v1.2`.
 - Five runnable examples in `examples/`, covering photo scans, search-and-log, glucose prediction,
   client tokens, and concurrent async scans.
 
-[Unreleased]: https://github.com/januaryai/python-sdk/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/januaryai/python-sdk/releases/tag/v0.1.0
+[Unreleased]: https://github.com/January-ai/python-sdk/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/January-ai/python-sdk/releases/tag/v0.1.0
