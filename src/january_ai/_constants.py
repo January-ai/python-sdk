@@ -37,3 +37,8 @@ MAX_ICC_PROFILE_BYTES: Final = 65_536
 
 ENV_API_KEY: Final = "JANUARY_API_KEY"
 ENV_BASE_URL: Final = "JANUARY_BASE_URL"
+
+# What a client token's value starts with. An account key uses "sk-" instead. The API tells the two
+# apart itself; the SDK reads the prefix only to decide which local checks apply to a call, never to
+# authenticate, so an unrecognized prefix is treated as an account key - the conservative side.
+CLIENT_TOKEN_PREFIX: Final = "ct-"

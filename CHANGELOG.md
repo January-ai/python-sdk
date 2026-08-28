@@ -30,6 +30,43 @@ underscore are internal and are not covered by the versioning guarantee.
 
 ### Fixed
 
+- **The decompression-bomb guard is actually enforced.** Pillow raises `DecompressionBombError`
+  only above *twice* `Image.MAX_IMAGE_PIXELS`; between one and two times it merely emits a
+  `DecompressionBombWarning`, which Python's default filters print and discard. The SDK caught the
+  warning class but never turned it into one, so an image at 1.9x the limit decoded in full unless
+  the host application had itself turned warnings into errors - roughly 537 MB of resident memory
+  for an attacker's few-hundred-kilobyte file at Pillow's own ~89.5-megapixel default. Both decode
+  sites, `preprocess=True` and the frame-count probe on the `preprocess=False` path, now raise the
+  warning inside a `warnings.catch_warnings()` window kept as small as the decode calls themselves,
+  and it surfaces as the same `ValueError` as the error above the band. Pillow's limit is not
+  raised and the guard is not disabled.
+- **`auth.create_client_token` is no longer replayed after an ambiguous failure.** Minting is not
+  idempotent and the API accepts no idempotency key, so a read timeout, a dropped connection, or a
+  retryable 5xx from a gateway that had already forwarded the request sent the POST again and minted
+  a second token the caller never sees - the raw value is returned exactly once - valid until its
+  TTL expires and clearable only by revoking every token the end user holds. A `ReadTimeout` used to
+  produce three POSTs; it now produces one. `revoke_client_tokens` is unchanged and still retries,
+  because revocation is idempotent.
+- **`default_headers` can no longer override `Content-Type`.** `Content-Type` was left to httpx,
+  which sets it only where nothing has claimed the name, so
+  `January(default_headers={"Content-Type": "text/plain"})` shipped a JSON body advertised as text.
+  Every body the SDK sends is JSON, so the header is now pinned alongside `Authorization` and
+  `Accept` on any request that carries one - and still left off requests that do not, since a GET
+  has no content to type.
+- **`base_url` validation covers the shapes that parse but cannot carry a path.** A scheme with no
+  host (`https://`, `https:///v1`), a query string, and a fragment were all accepted and then built
+  request URLs like `https:/v1.2/credits` and
+  `https://api.example.com?token=abc/v1.2/credits`, where the operation path lands inside the query
+  and vanishes. Each is now refused at construction with an error naming its own problem. A path
+  prefix (`https://proxy.example.com/january`, a gateway in front of the API) and a trailing slash
+  are still accepted.
+- **Client tokens may omit `end_user_id` on food-log calls.** The SDK required the identifier on all
+  four operations whatever the credential, and raised `ValueError` locally before sending. The API's
+  own description of `x-end-user-id` says it is "Required with an API key, which carries no user of
+  its own. A client token already names its end user, so it may omit this header", and a live `ct-`
+  token with `food_logs:read` and no header answers `200`. The local check now follows the
+  credential, which unblocks exactly the device-side case client tokens exist for; an `sk-` key, and
+  any credential whose prefix the SDK does not recognize, keeps the early error.
 - **A `date` where a timestamp belongs raises a `TypeError` that names the argument.** Passing one
   as `timestamp_utc` or `start_time` went straight to `value.tzinfo` and raised
   `AttributeError: 'datetime.date' object has no attribute 'tzinfo'`, naming neither the SDK nor the
@@ -89,7 +126,8 @@ underscore are internal and are not covered by the versioning guarantee.
   A client whose `httpx` client you supplied keeps working, since `close()` does not close it.
 - **Unreadable image paths raise `ValueError`.** A directory, an empty string, or a file without
   read permission escaped as `IsADirectoryError`/`PermissionError`, outside the documented set. A
-  Pillow decompression-bomb *warning* is now caught alongside the error.
+  Pillow decompression-bomb *warning* is now caught alongside the error - and, per the entry above,
+  raised rather than merely caught.
 - **A URI scheme the SDK does not support is named** rather than read as a relative filesystem path,
   so `file:///etc/passwd` no longer fails as a missing file called `file:/etc/passwd`.
 - **`base_url` is validated at construction.** A forgotten scheme now raises `ValueError` where the
@@ -101,6 +139,18 @@ underscore are internal and are not covered by the versioning guarantee.
 
 ### Changed
 
+- **The release workflow verifies before it publishes.** A `v*` tag went straight to checkout, a
+  tag/version assertion, `uv build`, a wheel-contents check, `twine check`, and an irreversible PyPI
+  upload - without running ruff, mypy, or a single test, on a commit CI may never have seen. A
+  `verify` job now runs the whole gate - ruff, ruff format, mypy over `src tests examples`, and
+  pytest - on Python 3.10 and 3.14, and `build` depends on it, so a red suite blocks the release.
+  The tag/version assertion is unchanged.
+- **The credit documentation no longer overstates billing.** The SDK stated that every successful
+  `/v1.2` call except `credits.get()` costs a credit. Measured against the live API by reading
+  `used_credits` either side of each call, `auth.create_client_token` and `auth.revoke_client_tokens`
+  bill nothing either. The README, the `Credits` docstrings, the `used_credits` field description,
+  and `examples/04_client_tokens.py` now say so, and say that it was measured rather than promised by
+  the published spec - so it should not be hard-coded as a contract.
 - Pillow is imported lazily, so `import january_ai` no longer loads it for the seventeen operations
   that cannot decode an image. It remains a required dependency.
 - Documentation corrections throughout: the `JanuaryError` hierarchy no longer claims to cover local

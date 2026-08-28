@@ -45,6 +45,13 @@ def _create_client_token_spec(
         # carries a default, so the header is suppressed here.
         end_user_id=None,
         timeout=timeout,
+        # Minting is not idempotent and the API accepts no idempotency key: every POST that
+        # reaches the server creates another token. Replaying a request whose fate is unknown -
+        # a read timeout, a dropped connection, a 502 from a gateway that had already forwarded
+        # it - therefore risks minting a token the caller never sees, since the raw value is
+        # returned exactly once. It would then sit valid until its TTL expires, unrevocable
+        # except by revoking every token the end user holds. Same reasoning as food_logs.create.
+        retry_ambiguous=False,
     )
 
 
@@ -60,6 +67,8 @@ def _revoke_client_tokens_spec(
         params={"end_user_id": end_user_id},
         end_user_id=None,
         timeout=timeout,
+        # retry_ambiguous stays at its default here, unlike on the mint above: revocation is
+        # idempotent, so replaying one whose fate is unknown can only finish the job.
     )
 
 
@@ -107,6 +116,14 @@ class Auth:
         The raw token value is returned exactly once, since the API stores only a hash of it.
         Relay it to the device and let the device refresh when it expires: a ``401`` with code
         ``token_expired`` is the signal to mint a new one and retry the original request once.
+
+        Like :meth:`~january_ai.resources.food_logs.FoodLogs.create`, this call is not replayed
+        after a failure that may already have reached the server. Minting is not idempotent and
+        the API accepts no idempotency key, so a replay would mint a second token whose value the
+        caller never receives - valid until its TTL runs out, and clearable only by revoking every
+        token the end user holds. If minting raises :class:`~january_ai.APIConnectionError` or
+        :class:`~january_ai.APITimeoutError`, simply mint again; if you need certainty that no
+        stray token survives, call :meth:`revoke_client_tokens` for that end user first.
 
         Args:
             end_user_id: Your stable identifier for the end user, at most 64 characters. Opaque
@@ -203,6 +220,14 @@ class AsyncAuth:
         The raw token value is returned exactly once, since the API stores only a hash of it.
         Relay it to the device and let the device refresh when it expires: a ``401`` with code
         ``token_expired`` is the signal to mint a new one and retry the original request once.
+
+        Like :meth:`~january_ai.resources.food_logs.FoodLogs.create`, this call is not replayed
+        after a failure that may already have reached the server. Minting is not idempotent and
+        the API accepts no idempotency key, so a replay would mint a second token whose value the
+        caller never receives - valid until its TTL runs out, and clearable only by revoking every
+        token the end user holds. If minting raises :class:`~january_ai.APIConnectionError` or
+        :class:`~january_ai.APITimeoutError`, simply mint again; if you need certainty that no
+        stray token survives, call :meth:`revoke_client_tokens` for that end user first.
 
         Args:
             end_user_id: Your stable identifier for the end user, at most 64 characters. Opaque

@@ -623,6 +623,61 @@ def test_decompression_bomb_warning_is_rejected_the_same_way(
             prepare_image(oversized_jpeg_bytes)
 
 
+def test_decompression_bomb_warning_is_enforced_under_the_default_warning_filters(
+    monkeypatch: pytest.MonkeyPatch, oversized_jpeg_bytes: bytes
+) -> None:
+    """Refuse the warning band whatever the host application has done with ``warnings``."""
+    # The test directly above proved only half of it: it turned the warning into an error itself,
+    # which is what an application running under `-W error` does. Under Python's own default filters
+    # the warning was printed and discarded, and the SDK went on to decode the image in full and
+    # return a payload - so an attacker's file at 1.9x the limit allocated for every one of its
+    # pixels. At Pillow's real default of ~89.5 megapixels that is a few hundred kilobytes on the
+    # wire turning into roughly 537 MB of resident memory inside a server process. Whether the
+    # image was refused depended on the host's warnings configuration rather than on the image,
+    # which is not a guard.
+    width, height = Image.open(io.BytesIO(oversized_jpeg_bytes)).size
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", (width * height) // 2 + 1)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        with pytest.raises(ValueError, match="decompression-bomb"):
+            prepare_image(oversized_jpeg_bytes)
+
+
+def test_decompression_bomb_warning_is_enforced_on_the_pass_through_path_too(
+    monkeypatch: pytest.MonkeyPatch, transparent_gif_bytes: bytes
+) -> None:
+    """Cover ``preprocess=False``, which opens GIFs and WEBPs to count their frames."""
+    # The pass-through path does not decode pixels for a JPEG or a PNG, but it does open the two
+    # animatable formats and walk their frames, which allocates. Its frame-count probe swallowed
+    # every exception on the grounds that it promises not to validate the image - which would have
+    # swallowed the guard's own refusal along with it, leaving the bomb enforced on one path and
+    # not the other. A refusal to allocate is not a parse failure to shrug at.
+    width, height = Image.open(io.BytesIO(transparent_gif_bytes)).size
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", (width * height) // 2 + 1)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        with pytest.raises(ValueError, match="decompression-bomb"):
+            prepare_image(transparent_gif_bytes, preprocess=False)
+
+
+def test_the_bomb_guard_leaves_the_hosts_warning_filters_as_it_found_them(
+    small_jpeg_bytes: bytes,
+) -> None:
+    """Put the process-global filter list back, since the SDK borrows it to enforce the guard."""
+    # ``warnings.catch_warnings`` swaps a module-global list, so a guard that leaked its own filter
+    # would silently turn every later DecompressionBombWarning in the host application into an
+    # exception - including ones raised by code that has nothing to do with this SDK.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        before = list(warnings.filters)
+
+        prepare_image(small_jpeg_bytes)
+
+        assert list(warnings.filters) == before
+
+
 # --------------------------------------------------------------------------------------------
 # The byte budget
 # --------------------------------------------------------------------------------------------

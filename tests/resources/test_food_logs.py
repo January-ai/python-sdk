@@ -1,7 +1,9 @@
 """The per-end-user food diary: create, list, update, and delete.
 
-Two things distinguish this resource from the rest. The ``x-end-user-id`` header is mandatory on
-all four operations, and the SDK enforces that locally rather than spending a round trip on it. And
+Two things distinguish this resource from the rest. Every operation has to say which end user it
+acts for, and with an ``sk-`` API key that means the ``x-end-user-id`` header, which the SDK
+enforces locally rather than spending a round trip on it - while a ``ct-`` client token already
+names its end user and may send no header at all, so the local check follows the credential. And
 ``update`` is a PATCH, so it has to tell "leave this field alone" apart from "set this field to
 null" - the difference between an omitted argument and an explicit ``None``.
 """
@@ -25,6 +27,9 @@ LOG_ID = "78129823-8ba2-4183-b13b-71f0e963c606"
 LOG_URL = f"{FOOD_LOGS_URL}/{LOG_ID}"
 
 END_USER_ID = "acme-user-8271"
+
+CLIENT_TOKEN = "ct-4fQr7yNb2KcXm9TvLpZ3wHs6JdRg8AeYuQ1oViB5xCn"
+"""A credential of the other kind: bound to one end user, so it may omit ``x-end-user-id``."""
 
 FOODS: list[FoodSelectionParam] = [{"id": 101963552, "serving": {"id": 68051535, "quantity": 1.4}}]
 FOODS_JSON = [{"id": 101963552, "serving": {"id": 68051535, "quantity": 1.4}}]
@@ -337,6 +342,97 @@ async def test_async_operations_require_a_resolvable_end_user(
             await anonymous.food_logs.delete(LOG_ID)
 
     assert respx_mock.calls.call_count == 0
+
+
+def test_a_client_token_may_omit_the_end_user_on_every_operation(
+    make_client: Callable[..., January], respx_mock: respx.MockRouter
+) -> None:
+    """Send all four operations with no ``x-end-user-id`` when the credential is a ``ct-`` token."""
+    # The local guard used to be unconditional, which blocked a documented and working use case:
+    # the API's own description of this header says it is "Required with an API key, which carries
+    # no user of its own. A client token already names its end user, so it may omit this header".
+    # Verified live - a ct- token with food_logs:read and no header answers 200 - and this is the
+    # device-side case client tokens exist for, where the device never learns an internal user id.
+    respx_mock.post(FOOD_LOGS_URL).mock(return_value=httpx.Response(200, json=FOOD_LOG_PAYLOAD))
+    respx_mock.get(FOOD_LOGS_URL).mock(return_value=httpx.Response(200, json=LIST_PAYLOAD))
+    respx_mock.patch(LOG_URL).mock(return_value=httpx.Response(200, json=FOOD_LOG_PAYLOAD))
+    respx_mock.delete(LOG_URL).mock(return_value=httpx.Response(200, json=DELETE_PAYLOAD))
+
+    with make_client(api_key=CLIENT_TOKEN, default_end_user_id=None) as device:
+        device.food_logs.create(FOODS)
+        device.food_logs.list("2024-09-01", "2024-09-08")
+        device.food_logs.update(LOG_ID, name="Lunch")
+        device.food_logs.delete(LOG_ID)
+
+    assert respx_mock.calls.call_count == 4
+    for call in respx_mock.calls:
+        assert "x-end-user-id" not in call.request.headers
+        assert call.request.headers["authorization"] == f"Bearer {CLIENT_TOKEN}"
+
+
+def test_a_client_token_may_also_pass_end_user_id_none_explicitly(
+    make_client: Callable[..., January], respx_mock: respx.MockRouter
+) -> None:
+    """Treat an explicit ``None`` on a token as "the token names the user", not as an error."""
+    route = respx_mock.get(FOOD_LOGS_URL).mock(return_value=httpx.Response(200, json=LIST_PAYLOAD))
+
+    with make_client(api_key=CLIENT_TOKEN, default_end_user_id=END_USER_ID) as device:
+        device.food_logs.list("2024-09-01", "2024-09-08", end_user_id=None)
+
+    assert route.call_count == 1
+    assert "x-end-user-id" not in route.calls.last.request.headers
+
+
+def test_a_client_token_still_sends_an_end_user_it_was_given(
+    make_client: Callable[..., January], respx_mock: respx.MockRouter
+) -> None:
+    """Forward an identifier the caller did supply, and let the API judge whether it matches."""
+    # The exemption is about a missing header, not about suppressing one. A value that disagrees
+    # with the token is refused upstream as ``end_user_mismatch``, which is the API's call to make.
+    route = respx_mock.get(FOOD_LOGS_URL).mock(return_value=httpx.Response(200, json=LIST_PAYLOAD))
+
+    with make_client(api_key=CLIENT_TOKEN, default_end_user_id=None) as device:
+        device.food_logs.list("2024-09-01", "2024-09-08", end_user_id=END_USER_ID)
+
+    assert route.calls.last.request.headers["x-end-user-id"] == END_USER_ID
+
+
+@pytest.mark.parametrize(
+    "api_key",
+    [
+        pytest.param("sk-test", id="account-key"),
+        pytest.param("ct", id="prefixless-lookalike"),
+        pytest.param("pk-unknown-kind", id="unrecognized-prefix"),
+    ],
+)
+def test_anything_that_is_not_a_client_token_still_requires_an_end_user(
+    make_client: Callable[..., January], respx_mock: respx.MockRouter, api_key: str
+) -> None:
+    """Keep the early local error for an API key, and for any prefix the SDK does not recognize."""
+    # Guessing "client token" for an unknown shape would throw away the error that catches the
+    # common mistake, so an unrecognized prefix is treated as an account key - the conservative
+    # side of the fork. ``ct`` without the hyphen is not a client token.
+    with (
+        make_client(api_key=api_key, default_end_user_id=None) as anonymous,
+        pytest.raises(ValueError, match="end_user_id is required"),
+    ):
+        anonymous.food_logs.create(FOODS)
+
+    assert respx_mock.calls.call_count == 0
+
+
+@pytest.mark.anyio
+async def test_an_async_client_token_may_omit_the_end_user_too(
+    make_async_client: Callable[..., AsyncJanuary], respx_mock: respx.MockRouter
+) -> None:
+    """Keep the two clients in step: the rule lives in the spec builder, not in either transport."""
+    route = respx_mock.get(FOOD_LOGS_URL).mock(return_value=httpx.Response(200, json=LIST_PAYLOAD))
+
+    async with make_async_client(api_key=CLIENT_TOKEN, default_end_user_id=None) as device:
+        await device.food_logs.list("2024-09-01", "2024-09-08")
+
+    assert route.call_count == 1
+    assert "x-end-user-id" not in route.calls.last.request.headers
 
 
 def test_the_client_default_end_user_is_used_when_a_call_omits_one(
