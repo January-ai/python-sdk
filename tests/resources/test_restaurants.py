@@ -172,3 +172,50 @@ def test_search_menu_items_sends_the_end_user_header_when_named(
     )
 
     assert route.calls.last.request.headers["x-end-user-id"] == "acme-user-8271"
+
+
+@pytest.mark.anyio
+async def test_menu_query_is_scoped_and_parses_sparse_nutrition(
+    client: January, async_client: AsyncJanuary, respx_mock: respx.MockRouter
+) -> None:
+    route = respx_mock.get(f"{RESTAURANTS_URL}/cafe-123/menu-items").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "items": [{"id": "101", "name": "Burger & fries", "nutrients": {}, "servings": []}]
+            },
+        )
+    )
+    result = client.restaurants.get_menu_items(
+        "cafe-123", query="Burger & fries", limit=500, offset=100
+    )
+    assert result.items[0].name == "Burger & fries"
+    assert dict(route.calls.last.request.url.params) == {
+        "query": "Burger & fries",
+        "limit": "500",
+        "offset": "100",
+    }
+    await async_client.restaurants.get_menu_items(
+        "cafe-123", query="Burger & fries", limit=500, offset=100
+    )
+    assert _fingerprint(route.calls[0].request) == _fingerprint(route.calls[1].request)
+
+
+def test_menu_omits_unset_query_and_accepts_blank(
+    client: January, respx_mock: respx.MockRouter
+) -> None:
+    route = respx_mock.get(f"{RESTAURANTS_URL}/cafe-123/menu-items").mock(
+        return_value=httpx.Response(200, json={"items": []})
+    )
+    client.restaurants.get_menu_items("cafe-123")
+    assert dict(route.calls.last.request.url.params) == {}
+    client.restaurants.get_menu_items("cafe-123", query="")
+    assert dict(route.calls.last.request.url.params) == {"query": ""}
+    with pytest.raises(ValueError):
+        client.restaurants.get_menu_items("cafe-123", query="x" * 257)
+    with pytest.raises(ValueError):
+        client.restaurants.get_menu_items("cafe-123", limit=501)
+    with pytest.raises(ValueError):
+        client.restaurants.get_menu_items("cafe-123", offset=-1)
+    with pytest.raises(ValueError):
+        client.restaurants.get_menu_items("../other")

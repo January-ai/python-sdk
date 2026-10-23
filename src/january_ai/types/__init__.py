@@ -63,6 +63,8 @@ from .glucose import (
 from .restaurants import (
     MenuItem,
     MenuSearchResponse,
+    RestaurantMenuItem,
+    RestaurantMenuItemsResponse,
     RestaurantResult,
     RestaurantSearchResponse,
 )
@@ -133,6 +135,8 @@ __all__ = [
     "MenuSearchResponse",
     "NutrientAmount",
     "Nutrients",
+    "RestaurantMenuItem",
+    "RestaurantMenuItemsResponse",
     "RestaurantResult",
     "RestaurantSearchResponse",
     "ScanPhoto",

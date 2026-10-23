@@ -25,7 +25,7 @@ EXPECTED_RESOURCES = frozenset(
 )
 
 # The 18 operations the /v1.2 API documents, counted across all seven resources.
-EXPECTED_OPERATION_COUNT = 18
+EXPECTED_OPERATION_COUNT = 19
 
 
 @pytest.fixture

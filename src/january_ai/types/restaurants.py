@@ -70,3 +70,20 @@ class MenuSearchResponse(JanuaryModel):
         description="Total number of matches; may exceed the number of items returned."
     )
     items: list[MenuItem]
+
+
+class RestaurantMenuItem(JanuaryModel):
+    """One dish in a restaurant's menu, with sparse nutrition and available servings."""
+
+    id: str
+    name: str | None
+    nutrients: Nutrients
+    glycemic_index: float | None = None
+    glycemic_load: float | None = None
+    servings: list[FoodServing]
+
+
+class RestaurantMenuItemsResponse(JanuaryModel):
+    """A page of dishes from one restaurant, optionally filtered by dish name."""
+
+    items: list[RestaurantMenuItem]

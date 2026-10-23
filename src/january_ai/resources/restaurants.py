@@ -6,6 +6,7 @@ recorded on the resource classes themselves.
 
 from __future__ import annotations
 
+import re
 from typing import cast
 
 import httpx
@@ -13,7 +14,7 @@ import httpx
 from .._base_client import AsyncAPIClient, SyncAPIClient
 from .._constants import API_VERSION_PATH
 from .._types import NOT_GIVEN, NotGiven, RequestSpec
-from ..types import MenuSearchResponse, RestaurantSearchResponse
+from ..types import MenuSearchResponse, RestaurantMenuItemsResponse, RestaurantSearchResponse
 
 __all__ = ["AsyncRestaurants", "Restaurants"]
 
@@ -74,6 +75,37 @@ def _search_menu_items_spec(
     )
 
 
+def _get_menu_items_spec(
+    restaurant_id: str,
+    *,
+    query: str | None,
+    limit: int | None,
+    offset: int | None,
+    end_user_id: str | NotGiven | None,
+    timeout: float | httpx.Timeout | NotGiven,
+) -> RequestSpec[RestaurantMenuItemsResponse]:
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", restaurant_id):
+        raise ValueError("restaurant_id must contain 1-64 letters, digits, underscores or hyphens")
+    if query is not None and len(query) > 256:
+        raise ValueError("query must contain at most 256 characters")
+    if limit is not None and (
+        isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 500
+    ):
+        raise ValueError("limit must be an integer between 1 and 500")
+    if offset is not None and (
+        isinstance(offset, bool) or not isinstance(offset, int) or offset < 0
+    ):
+        raise ValueError("offset must be a non-negative integer")
+    return RequestSpec(
+        method="GET",
+        path=f"{_RESTAURANTS_PATH}/{restaurant_id}/menu-items",
+        cast_to=RestaurantMenuItemsResponse,
+        params={"query": query, "limit": limit, "offset": offset},
+        end_user_id=end_user_id,
+        timeout=timeout,
+    )
+
+
 class Restaurants:
     """Find restaurants near an end user and the dishes they serve.
 
@@ -96,6 +128,37 @@ class Restaurants:
     def __init__(self, client: SyncAPIClient) -> None:
         """Bind the resource to the client that sends its requests."""
         self._client = client
+
+    def get_menu_items(
+        self,
+        restaurant_id: str,
+        *,
+        query: str | None = None,
+        limit: int | None = None,
+        offset: int | None = None,
+        end_user_id: str | NotGiven | None = NOT_GIVEN,
+        timeout: float | httpx.Timeout | NotGiven = NOT_GIVEN,
+    ) -> RestaurantMenuItemsResponse:
+        """List one restaurant's menu, optionally filtered by dish name (case insensitive).
+
+        Omitted or blank ``query`` lists the whole menu. ``limit`` is 1-500 (default
+        100) and ``offset`` starts at zero. Advance by the returned item count; a
+        page shorter than the requested limit is the last page. An empty page is
+        valid. Requires the ``restaurants:read`` scope with a client token.
+        """
+        return cast(
+            RestaurantMenuItemsResponse,
+            self._client.send(
+                _get_menu_items_spec(
+                    restaurant_id,
+                    query=query,
+                    limit=limit,
+                    offset=offset,
+                    end_user_id=end_user_id,
+                    timeout=timeout,
+                )
+            ),
+        )
 
     def search(
         self,
@@ -214,6 +277,37 @@ class AsyncRestaurants:
     def __init__(self, client: AsyncAPIClient) -> None:
         """Bind the resource to the client that sends its requests."""
         self._client = client
+
+    async def get_menu_items(
+        self,
+        restaurant_id: str,
+        *,
+        query: str | None = None,
+        limit: int | None = None,
+        offset: int | None = None,
+        end_user_id: str | NotGiven | None = NOT_GIVEN,
+        timeout: float | httpx.Timeout | NotGiven = NOT_GIVEN,
+    ) -> RestaurantMenuItemsResponse:
+        """List one restaurant's menu, optionally filtered by dish name (case insensitive).
+
+        Omitted or blank ``query`` lists the whole menu. ``limit`` is 1-500 (default
+        100) and ``offset`` starts at zero. Advance by the returned item count; a
+        page shorter than the requested limit is the last page. An empty page is
+        valid. Requires the ``restaurants:read`` scope with a client token.
+        """
+        return cast(
+            RestaurantMenuItemsResponse,
+            await self._client.send(
+                _get_menu_items_spec(
+                    restaurant_id,
+                    query=query,
+                    limit=limit,
+                    offset=offset,
+                    end_user_id=end_user_id,
+                    timeout=timeout,
+                )
+            ),
+        )
 
     async def search(
         self,
