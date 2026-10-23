@@ -1168,3 +1168,18 @@ see [SECURITY.md](https://github.com/January-ai/python-sdk/blob/main/SECURITY.md
 ## License
 
 MIT. See [LICENSE](https://github.com/January-ai/python-sdk/blob/main/LICENSE).
+
+## Search within a restaurant
+
+Use a restaurant ID returned by restaurant search to filter that menu by dish name.
+
+```python
+dishes = client.restaurants.get_menu_items(restaurant_id, query="burger")
+```
+
+`query` is optional (up to 256 characters). Matching ignores case; omit it or pass
+an empty string to browse the full menu. `limit` is 1–500 (default 100), and
+`offset` starts at zero. Advance by the returned item count and stop at a page
+shorter than the requested limit. Reset the offset when changing the query.
+No coordinates are required for this lookup. Empty results are valid; a 404
+means the restaurant was not found. Client tokens require `restaurants:read`.
